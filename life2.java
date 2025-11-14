@@ -1,6 +1,10 @@
 import javafx.application.Application;
+import javafx.collections.FXCollections;
 import javafx.scene.control.ListView;
 import javafx.scene.control.SelectionMode;
+import javafx.scene.control.Menu;
+import javafx.scene.control.MenuBar;
+import javafx.scene.control.MenuItem;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
@@ -11,14 +15,26 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.Group;
 import javafx.stage.Stage;
+import javafx.stage.FileChooser;
 import javafx.animation.AnimationTimer;
+import javafx.scene.paint.Color;
 import javafx.scene.control.TextInputDialog;
-import java.util.Optional;
+import javafx.application.Platform;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.file.Files;
+
+import java.util.Optional;
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque; // Added
+import java.util.Deque;      // Added
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 public class life2 extends Application {
 
@@ -31,6 +47,14 @@ public class life2 extends Application {
     private byte[][] grid;
     private byte[][] next;
 
+    private final int HISTORY_SIZE = 2;
+    private final Deque<byte[][]> history = new ArrayDeque<>(HISTORY_SIZE);
+
+    private boolean[][] highlightBuffer;
+    private final int COLOR_DEAD = 0xFF000000; // Black
+    private final int COLOR_ALIVE = 0xFFFFFFFF; // White
+    private final int COLOR_HIGHLIGHT = 0xFFFF0000; // Red (for all patterns)
+
     // Removed history-related fields as they were only used for pattern detection
 
     private WritableImage image;
@@ -40,6 +64,8 @@ public class life2 extends Application {
 
     private ExecutorService pool;
     private AnimationTimer timer;
+    private volatile boolean isCalculating = false; // Prevents frame stacking
+    private ListView<String> patternListView;
 
     private double scaleFactor = 1.0;
     private final double zoomStep = 0.1;
@@ -58,16 +84,33 @@ public class life2 extends Application {
         rowBytes = (cols + 7) / 8;
         grid = new byte[rows][rowBytes];
         next = new byte[rows][rowBytes];
+	highlightBuffer = new boolean[rows][cols];	
+
 
         image = new WritableImage(cols, rows);
         writer = image.getPixelWriter();
-        format = PixelFormat.createByteIndexedInstance(new int[]{0xFF000000, 0xFFFFFFFF});
+        format = PixelFormat.createByteIndexedInstance(new int[]{COLOR_DEAD, COLOR_ALIVE, COLOR_HIGHLIGHT});
         rowBuffer = ByteBuffer.allocate(cols);
         pool = Executors.newFixedThreadPool(THREADS);
+	
+	MenuBar menuBar = new MenuBar();
+	Menu fileMenu = new Menu("File");
+	menuBar.getMenus().addAll(fileMenu);
+
+	MenuItem openItem = new MenuItem("Open Grid...");
+	MenuItem saveAsTextItem = new MenuItem("Save As Text...");
+
+	fileMenu.getItems().addAll(openItem, saveAsTextItem);
 
         initializeGrid();
+	saveHistorySnapshot();
         
         // --- Removed Pattern ListView and related imports ---
+	patternListView = new ListView<>();
+        patternListView.setItems(FXCollections.observableArrayList(
+                "Block", "Blinker", "Glider", "Beehive" // Add "Toad", "Beacon" if you have them
+        ));
+        patternListView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
 
         ImageView view = new ImageView(image);
         view.setPreserveRatio(true);
@@ -77,6 +120,9 @@ public class life2 extends Application {
 
 	view.setOnMouseClicked(this::handleMouseClick);
 
+	saveAsTextItem.setOnAction(e -> saveGridAsText());
+	openItem.setOnAction(e -> openGridFromFile(stage));
+
         Group viewGroup = new Group(view);
         ScrollPane scrollPane = new ScrollPane(viewGroup);
         scrollPane.setPannable(true);
@@ -84,12 +130,14 @@ public class life2 extends Application {
         Button oneGenButton = new Button("Run One Generation");
         Button startButton = new Button("Start");
         Button stopButton = new Button("Stop");
+	Button clearButton = new Button("Clear Grid");
         
         // Removed patternListView from controls VBox
-        VBox controls = new VBox(10, oneGenButton, startButton, stopButton);
+        VBox controls = new VBox(10, oneGenButton, startButton, stopButton,clearButton, patternListView);
         controls.setStyle("-fx-padding: 10; -fx-background-color: #DDDDDD");
 
         BorderPane root = new BorderPane();
+	root.setTop(menuBar);
         root.setCenter(scrollPane);
         root.setRight(controls);
 
@@ -104,22 +152,45 @@ public class life2 extends Application {
             @Override
             public void handle(long now) {
                 long delayNs = 100_000_000L; // 0.1 sec
-                if (now - lastUpdate >= delayNs) {
+                // Don't stack frames if calculation is still running
+                if (isCalculating || (now - lastUpdate < delayNs)) {
+                    return;
+                }
+                
+                isCalculating = true;
+                lastUpdate = now;
+                
+                // Get selected patterns on FX thread
+                final List<String> selectedPatterns = patternListView.getSelectionModel().getSelectedItems();
+
+                // --- Run ALL heavy logic on worker threads ---
+                Runnable simulationTask = () -> {
                     try {
-                        updateGridParallel();
-                        // Removed saveHistorySnapshot()
+                        // 1. Save N-1 state
+                        saveHistorySnapshot();
+                        
+                        // 2. Calculate N state (this blocks the worker thread, not FX thread)
+                        updateGridParallel(); 
+                        
+                        // 3. Find patterns by comparing N-1 and N
+                        highlightPatternsParallel(selectedPatterns);
+
                     } catch (Exception e) {
                         e.printStackTrace();
-                        stop();
+                    } finally {
+                        // 4. When done, schedule draw on FX thread
+                        Platform.runLater(() -> {
+                            drawGrid();
+                            isCalculating = false;
+                        });
                     }
-                    drawGrid();
-                    // Removed highlightPatternsParallel()
-                    lastUpdate = now;
-                }
+                };
+                pool.submit(simulationTask);
             }
-        };
-
-        // Simplified button actions
+        };        
+	
+	// Simplified button actions
+	clearButton.setOnAction(e -> clearGrid());
         oneGenButton.setOnAction(e -> runOnce());
         startButton.setOnAction(e -> {
 		timer.start();
@@ -134,16 +205,28 @@ public class life2 extends Application {
     }
 
     private void runOnce() {
-        try {
-            updateGridParallel();
-            // Removed saveHistorySnapshot()
-            drawGrid();
-            // Removed highlightPatternsParallel()
-        } catch (Exception ex) {
-            ex.printStackTrace();
-        }
-    }
+        if (isCalculating) return; // Don't run if already running
+        
+        isCalculating = true;
+        final List<String> selectedPatterns = patternListView.getSelectionModel().getSelectedItems();
 
+        Runnable simulationTask = () -> {
+            try {
+                saveHistorySnapshot();
+                updateGridParallel();
+		//printGridState(prevGrid, grid);
+                highlightPatternsParallel(selectedPatterns);
+            } catch (Exception e) {
+                e.printStackTrace();
+            } finally {
+                Platform.runLater(() -> {
+                    drawGrid();
+                    isCalculating = false;
+                });
+            }
+        };
+        pool.submit(simulationTask);
+    }
     private void showError(String msg) {
         Alert alert = new Alert(Alert.AlertType.ERROR);
         alert.setTitle("Error");
@@ -264,8 +347,21 @@ private void handleMouseClick(javafx.scene.input.MouseEvent event) {
         }
     }
 
-    // Removed saveHistorySnapshot()
-    // Removed deepCopyGrid()
+    private void saveHistorySnapshot() {
+        if (history.size() >= HISTORY_SIZE) {
+            history.removeFirst();
+        }
+        history.addLast(deepCopyGrid(grid));
+    }
+
+    private byte[][] deepCopyGrid(byte[][] src) {
+        if (src == null) return null;
+        byte[][] copy = new byte[src.length][];
+        for (int i = 0; i < src.length; i++) {
+            copy[i] = src[i].clone();
+        }
+        return copy;
+    }
 
     private int countNeighbors(int x, int y) {
         int count = 0;
@@ -280,7 +376,7 @@ private void handleMouseClick(javafx.scene.input.MouseEvent event) {
         return count;
     }
 
-    private boolean getBit(byte[][] g, int x, int y) {
+    public boolean getBit(byte[][] g, int x, int y) {
         return (g[y][x >> 3] & (1 << (x & 7))) != 0;
     }
 
@@ -291,6 +387,39 @@ private void handleMouseClick(javafx.scene.input.MouseEvent event) {
         else g[y][byteIndex] &= ~bit;
     }
 
+    private void printGridState(byte[][] prevGrid, byte[][] currentGrid) {
+    if (rows > 50 || cols > 50) {
+        System.out.println("Grid is too large for full printout (Max 50x50 recommended). Printing aborted.");
+        return;
+    }
+    
+    int printRows = rows;
+    int printCols = cols;
+
+    System.out.println("=================================================");
+    System.out.println("GENERATION DEBUG (Size: " + rows + "x" + cols + ")");
+    System.out.println("=================================================");
+
+    // Print Header
+    System.out.printf("%-" + (printCols * 2 + 10) + "s %s\n", "PREVIOUS GRID (N-1)", "CURRENT GRID (N)");
+
+    for (int y = 0; y < printRows; y++) {
+        StringBuilder prevLine = new StringBuilder();
+        StringBuilder currLine = new StringBuilder();
+        
+        for (int x = 0; x < printCols; x++) {
+            boolean prevAlive = getBit(prevGrid, x, y);
+            boolean currAlive = getBit(currentGrid, x, y);
+            
+            prevLine.append(prevAlive ? "■ " : "□ ");
+            currLine.append(currAlive ? "■ " : "□ ");
+        }
+        
+        System.out.printf("%-" + (printCols * 2 + 10) + "s %s\n", prevLine.toString(), currLine.toString());
+    }
+    System.out.println("=================================================");
+}
+
     /** Draws the current grid state */
     private void drawGrid() {
         int imgWidth = cols;
@@ -299,14 +428,196 @@ private void handleMouseClick(javafx.scene.input.MouseEvent event) {
         for (int y = 0; y < imgHeight; y++) {
             rowBuffer.clear();
             for (int x = 0; x < imgWidth; x++) {
-                rowBuffer.put((byte) (getBit(grid, x, y) ? 1 : 0));
+                byte pixelValue;
+                if (highlightBuffer[y][x]) {
+                    pixelValue = 2; // Index for COLOR_HIGHLIGHT
+                } else if (getBit(grid, x, y)) {
+                    pixelValue = 1; // Index for COLOR_ALIVE
+                } else {
+                    pixelValue = 0; // Index for COLOR_DEAD
+                }
+                rowBuffer.put(pixelValue);
             }
             rowBuffer.flip();
             writer.setPixels(0, y, imgWidth, 1, format, rowBuffer, imgWidth);
         }
     }
+    
+    private void highlightPatternsParallel(List<String> selectedPatterns) throws InterruptedException {
+        // 1. Clear the buffer
+        for (boolean[] row : highlightBuffer) java.util.Arrays.fill(row, false);
+        if (selectedPatterns == null || selectedPatterns.isEmpty()) {
+            return;
+        }
 
-    // Removed highlightPatternsParallel()
+        // 2. Get previous grid state
+        byte[][] prevGrid = (history.size() >= 2) ? history.getLast() : grid;
+	//printGridState(prevGrid, grid);
+
+        CountDownLatch latch = new CountDownLatch(selectedPatterns.size());
+
+        for (String patternName : selectedPatterns) {
+            pool.submit(() -> {
+                try {
+                    LifePattern pattern = null;
+                    switch (patternName) {
+                        case "Block":   pattern = new BlockPattern(); break;
+                        case "Blinker": pattern = new BlinkerPattern(); break;
+                        case "Glider":  pattern = new GliderPattern(); break;
+			case "Beehive": pattern = new BeehivePattern();break;
+                        // Add more patterns here
+                    }
+                    if (pattern == null) return;
+
+                    // Iterate all cells to check for this pattern
+                    for (int r = 0; r < rows; r++) {
+                        for (int c = 0; c < cols; c++) {
+                            boolean match = false;
+                            if (pattern instanceof EvolvingPattern ep) {
+                                // Evolving patterns need 'prevGrid' and 'grid'
+                                match = ep.matchesAfterEvolution(prevGrid, grid, r, c, rows, cols);
+                            } else {
+                                // Still lifes only need the current 'grid'
+                                match = pattern.matches(grid, r, c, rows, cols);
+                            }
+
+                            if (match) {
+                                // Mark the cells in the shared buffer
+                                // This is thread-safe because it only writes 'true'
+                                pattern.markPattern(highlightBuffer, grid, r, c, rows, cols);
+                            }
+                        }
+                    }
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+
+        // 3. Wait for all pattern-search threads to finish
+        latch.await();
+    }
+
+    private void saveGridAsText() {
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Save Grid As Text");
+    fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Text Files (*.txt)", "*.txt"));
+    File file = fileChooser.showSaveDialog(null);
+
+    if (file != null) {
+        try (PrintWriter writer = new PrintWriter(file)) {
+            // Write rows and columns header first
+            writer.println(rows + "x" + cols); 
+
+            // Write the grid state row by row
+            for (int y = 0; y < rows; y++) {
+                StringBuilder rowString = new StringBuilder();
+                for (int x = 0; x < cols; x++) {
+                    // Use '1' for alive and '0' for dead
+                    rowString.append(getBit(grid, x, y) ? '1' : '0');
+                }
+                writer.println(rowString.toString());
+            }
+            showError("Grid successfully saved to " + file.getAbsolutePath());
+        } catch (IOException e) {
+            showError("Error saving file: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
+ 
+   private void openGridFromFile(Stage stage) {
+    FileChooser fileChooser = new FileChooser();
+    fileChooser.setTitle("Open Grid File");
+    fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Text Files (*.txt)", "*.txt"));
+    File file = fileChooser.showOpenDialog(stage);
+
+    if (file != null) {
+        try {
+            List<String> lines = Files.readAllLines(file.toPath());
+            if (lines.isEmpty()) throw new IOException("File is empty.");
+
+            // 1. Parse Dimensions from the first line (e.g., "1000x1000")
+            String[] dimParts = lines.get(0).split("x");
+            int newRows = Integer.parseInt(dimParts[0].trim());
+            int newCols = Integer.parseInt(dimParts[1].trim());
+
+            if (newRows <= 0 || newCols <= 0 || newRows > 5000 || newCols > 5000) {
+                throw new IOException("Invalid grid dimensions specified in file.");
+            }
+
+            // 2. Stop/Reset Current Simulation
+            timer.stop(); 
+            isSimulationRunning = false;
+            
+            // 3. Re-initialize Grid and related structures
+            rows = newRows;
+            cols = newCols;
+            rowBytes = (cols + 7) / 8;
+            grid = new byte[rows][rowBytes];
+            next = new byte[rows][rowBytes];
+            highlightBuffer = new boolean[rows][cols]; // Assuming you changed this to int[][] for multiple colors, otherwise make it boolean[][]
+            history.clear();
+
+            // 4. Load Grid Data
+            for (int y = 0; y < rows; y++) {
+                if (y + 1 >= lines.size()) throw new IOException("File data incomplete.");
+                String dataLine = lines.get(y + 1).trim();
+                if (dataLine.length() != cols) throw new IOException("Row " + y + " has incorrect length.");
+                
+                for (int x = 0; x < cols; x++) {
+                    boolean isAlive = dataLine.charAt(x) == '1';
+                    setBit(grid, x, y, isAlive);
+                }
+            }
+
+            // 5. Update UI and Draw
+            // NOTE: You'll need to reconfigure the ImageView/WritableImage if the size changed drastically
+            // For now, we only update the core grid, assuming the canvas scales.
+            drawGrid(); 
+            saveHistorySnapshot(); // Start a new history
+            
+            showError("Grid loaded successfully (" + rows + "x" + cols + ").");
+
+        } catch (Exception e) {
+            showError("Error loading grid file: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
+
+	// life2.java
+
+/** Resets the entire grid, stopping the simulation and clearing history. */
+private void clearGrid() {
+    // 1. Stop the animation timer if running
+    if (timer != null) {
+        timer.stop();
+        isSimulationRunning = false;
+    }
+
+    // 2. Clear the main grid arrays (setting all bytes to 0)
+    for (int y = 0; y < rows; y++) {
+        // Since the initial state of a byte array is 0, Arrays.fill is the fastest way
+        java.util.Arrays.fill(grid[y], (byte) 0);
+        java.util.Arrays.fill(next[y], (byte) 0);
+    }
+    
+    // 3. Clear the highlight buffer (resetting all indices/colors to 0)
+    if (highlightBuffer != null) {
+        for (int y = 0; y < rows; y++) {
+            java.util.Arrays.fill(highlightBuffer[y], false);
+        }
+    }
+
+    // 4. Clear history
+    history.clear();
+    saveHistorySnapshot(); // Save the new, empty state as the starting point
+
+    // 5. Redraw the grid to show a blank canvas
+    drawGrid();
+}
+   
 
     @Override
     public void stop() throws Exception {
@@ -314,7 +625,7 @@ private void handleMouseClick(javafx.scene.input.MouseEvent event) {
         super.stop();
     }
 
+	
+
     public static void main(String[] args) { launch(); }
 }
-
-// --- Removed all LifePattern interfaces and classes (BlockPattern, BlinkerPattern, etc.) ---
