@@ -66,7 +66,7 @@ public class life2 extends Application {
     private final int COLOR_ALIVE = 0xFFFFFFFF; // White
     private final int COLOR_HIGHLIGHT = 0xFFFF0000; // Red (for all patterns)
 
-    // Removed history-related fields as they were only used for pattern detection
+  
 
     private WritableImage image;
     private PixelWriter writer;
@@ -99,7 +99,7 @@ public class life2 extends Application {
         rowBytes = (cols + 7) / 8;
         grid = new byte[rows][rowBytes];
         next = new byte[rows][rowBytes];
-	highlightBuffer = new boolean[rows][cols];	
+	    highlightBuffer = new boolean[rows][cols];	
 
 
         image = new WritableImage(cols, rows);
@@ -120,31 +120,30 @@ public class life2 extends Application {
         initializeGrid();
 	saveHistorySnapshot();
         
-        // --- Removed Pattern ListView and related imports ---
 	patternListView = new ListView<>();
         patternListView.setItems(FXCollections.observableArrayList(
                 "Block", "Blinker", "Glider", "Beehive" // Add "Toad", "Beacon" if you have them
         ));
-        patternListView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+    patternListView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
 
-        ImageView view = new ImageView(image);
-        view.setPreserveRatio(true);
-        view.setFitWidth(maxCanvasSize);
-        view.setFitHeight(maxCanvasSize);
-        view.setOnScroll(this::handleZoom);
+    ImageView view = new ImageView(image);
+    view.setPreserveRatio(true);
+    view.setFitWidth(maxCanvasSize);
+    view.setFitHeight(maxCanvasSize);
+	view.setOnScroll(this::handleZoom);
 
 	view.setOnMouseClicked(this::handleMouseClick);
 
 	saveAsTextItem.setOnAction(e -> saveGridAsText());
 	openItem.setOnAction(e -> openGridFromFile(stage));
 
-        Group viewGroup = new Group(view);
-        ScrollPane scrollPane = new ScrollPane(viewGroup);
-        scrollPane.setPannable(true);
+    Group viewGroup = new Group(view);
+	ScrollPane scrollPane = new ScrollPane(viewGroup);
+    scrollPane.setPannable(true);
 
-        Button oneGenButton = new Button("Run One Generation");
-        Button startButton = new Button("Start");
-        Button stopButton = new Button("Stop");
+    Button oneGenButton = new Button("Run One Generation");
+    Button startButton = new Button("Start");
+    Button stopButton = new Button("Stop");
 	Button clearButton = new Button("Clear Grid");
 	
 	genLabel = new Label("Generación: 0");
@@ -156,60 +155,55 @@ public class life2 extends Application {
 	
 	VBox controls = new VBox(10, genLabel, popLabel, oneGenButton, startButton, stopButton, clearButton, patternListView);
         
-        // Removed patternListView from controls VBox
     
-        controls.setStyle("-fx-padding: 10; -fx-background-color: #DDDDDD");
+    controls.setStyle("-fx-padding: 10; -fx-background-color: #DDDDDD");
 
-        BorderPane root = new BorderPane();
+    BorderPane root = new BorderPane();
 	root.setTop(menuBar);
-        root.setCenter(scrollPane);
-        root.setRight(controls);
+    root.setCenter(scrollPane);
+    root.setRight(controls);
 
-        Scene scene = new Scene(root);
-        stage.setScene(scene);
-        stage.setTitle("Game of Life"); // Title simplified
-        stage.show();
+    Scene scene = new Scene(root);
+    stage.setScene(scene);
+    stage.setTitle("Game of Life"); // Title simplified
+    stage.show();
 
-        timer = new AnimationTimer() {
-            private long lastUpdate = 0;
+    timer = new AnimationTimer() {
+        private long lastUpdate = 0;
 
-            @Override
-            public void handle(long now) {
-                long delayNs = 100_000_000L; // 0.1 sec
-                // Don't stack frames if calculation is still running
-                if (isCalculating || (now - lastUpdate < delayNs)) {
+        @Override
+        public void handle(long now) {
+            long delayNs = 100_000_000L; // 0.1 sec
+            if (isCalculating || (now - lastUpdate < delayNs)) {
                     return;
-                }
+            }
                 
-                isCalculating = true;
-                lastUpdate = now;
-                
-                // Get selected patterns on FX thread
-                final List<String> selectedPatterns = patternListView.getSelectionModel().getSelectedItems();
+            isCalculating = true;
+            lastUpdate = now;
+            
+            final List<String> selectedPatterns = patternListView.getSelectionModel().getSelectedItems();
 
-                // --- Run ALL heavy logic on worker threads ---
-                Runnable simulationTask = () -> {
-                    try {
-                        // 1. Save N-1 state
+            Runnable simulationTask = () -> {
+                try {
+                    // 1. Save N-1 state
                         saveHistorySnapshot();
                         
-                        // 2. Calculate N state (this blocks the worker thread, not FX thread)
+                    // 2. Calculate N state (this blocks the worker thread, not FX thread)
                         updateGridParallel();
-			generationCount++; 
+						generationCount++; 
                         
-                        // 3. Find patterns by comparing N-1 and N
-                        highlightPatternsParallel(selectedPatterns);
+                    // 3. Find patterns by comparing N-1 and N
+                    	highlightPatternsParallel(selectedPatterns);
 
                     } catch (Exception e) {
                         e.printStackTrace();
                     } finally {
-                        // 4. When done, schedule draw on FX thread
+                    // 4. When done, schedule draw on FX thread
                         Platform.runLater(() -> {
                             drawGrid();
-			    genLabel.setText("Generación: " + generationCount);
+			    			genLabel.setText("Generación: " + generationCount);
     
-    			    // USAMOS LA VARIABLE QUE CALCULÓ EL UPDATE:
-    			    popLabel.setText("Células Vivas: " + currentAliveCount);
+    			    		popLabel.setText("Células Vivas: " + currentAliveCount);
                             isCalculating = false;
                         });
                     }
@@ -218,7 +212,6 @@ public class life2 extends Application {
             }
         };        
 	
-	// Simplified button actions
 	clearButton.setOnAction(e -> clearGrid());
         oneGenButton.setOnAction(e -> runOnce());
         startButton.setOnAction(e -> {
@@ -243,23 +236,23 @@ public class life2 extends Application {
             try {
                 saveHistorySnapshot();
                 updateGridParallel();
-		generationCount++;
-		//printGridState(prevGrid, grid);
+				generationCount++;
                 highlightPatternsParallel(selectedPatterns);
             } catch (Exception e) {
                 e.printStackTrace();
             } finally {
                 Platform.runLater(() -> {
                     drawGrid();
-		    genLabel.setText("Generación: " + generationCount);
-		    popLabel.setText("Células Vivas: " + currentAliveCount);
+		    		genLabel.setText("Generación: " + generationCount);
+		    		popLabel.setText("Células Vivas: " + currentAliveCount);
                     isCalculating = false;
                 });
             }
         };
         pool.submit(simulationTask);
     }
-    private void showError(String msg) {
+    
+	private void showError(String msg) {
         Alert alert = new Alert(Alert.AlertType.ERROR);
         alert.setTitle("Error");
         alert.setHeaderText(null);
@@ -267,43 +260,35 @@ public class life2 extends Application {
         alert.showAndWait();
     }
 
-    // Add this method to your life2 class:
+	private void handleMouseClick(javafx.scene.input.MouseEvent event) 
+    	if (isSimulationRunning) {
+        	event.consume();
+        	return; 
+    	}
 
-private void handleMouseClick(javafx.scene.input.MouseEvent event) {
-    // 1. **GUARD**: Check your state flag (as we discussed)
-    if (isSimulationRunning) {
-        event.consume();
-        return; 
-    }
-
-    // 2. **COORDINATES**: Get click position relative to the ImageView
-    double clickX = event.getX();
-    double clickY = event.getY();
+    	double clickX = event.getX();
+    	double clickY = event.getY();
     
-    ImageView view = (ImageView) event.getSource();
-    double effectiveWidth = view.getBoundsInLocal().getWidth();
-    double effectiveHeight = view.getBoundsInLocal().getHeight();
+    	ImageView view = (ImageView) event.getSource();
+    	double effectiveWidth = view.getBoundsInLocal().getWidth();
+    	double effectiveHeight = view.getBoundsInLocal().getHeight();
     
-    // 3. **TRANSLATE**: Convert view coordinates (e.g., 0-1000) to grid coordinates (e.g., 0-5000)
-    int gridX = (int) Math.floor((clickX / effectiveWidth) * cols);
-    int gridY = (int) Math.floor((clickY / effectiveHeight) * rows);
+    	int gridX = (int) Math.floor((clickX / effectiveWidth) * cols);
+    	int gridY = (int) Math.floor((clickY / effectiveHeight) * rows);
     
-    // Bounds check
-    if (gridX >= 0 && gridX < cols && gridY >= 0 && gridY < rows) {
+    
+    	if (gridX >= 0 && gridX < cols && gridY >= 0 && gridY < rows) {
         
-        // 4. **TOGGLE**: Use YOUR getBit/setBit functions
-        boolean isAlive = getBit(grid, gridX, gridY);
-        setBit(grid, gridX, gridY, !isAlive);
+        	boolean isAlive = getBit(grid, gridX, gridY);
+        	setBit(grid, gridX, gridY, !isAlive);
 
-        // 5. **REDRAW**: Use YOUR drawGrid function
-        drawGrid(); 
-    }
+        	drawGrid(); 
+    	}
     
-    event.consume();
-}    
+    	event.consume();
+	}    
 
 private boolean askGridSize() {
-    // Cambiamos el tipo de retorno del Dialog a algo genérico o simplemente usamos Pair
     Dialog<Pair<String, String>> dialog = new Dialog<>();
     dialog.setTitle("Configuración de Simulación");
     dialog.setHeaderText("Configura Tamaño, Regla y Variante");
@@ -320,12 +305,10 @@ private boolean askGridSize() {
     sizeField.setPromptText("1000x1000");
     sizeField.setText("1000x1000");
 
-    // ComboBox 1: Regla Principal
     ComboBox<String> ruleBox = new ComboBox<>();
     ruleBox.getItems().addAll("Game of Life", "Rule 30");
     ruleBox.setValue("Game of Life");
 
-    // ComboBox 2: Variante del Juego de la Vida (Nuevo)
     ComboBox<String> variantBox = new ComboBox<>();
     variantBox.getItems().addAll("Standard (B3/S23)", "Variant (B2/S7)");
     variantBox.setValue("Standard (B3/S23)");
@@ -391,117 +374,115 @@ private boolean askGridSize() {
         event.consume();
     }
 
-    private void initializeGrid() {
-        for (int y = 0; y < rows; y++) {
-            for (int x = 0; x < cols; x++) {
-                if (Math.random() < 0.2)
-                    setBit(grid, x, y, true);
-            }
+private void initializeGrid() {
+    for (int y = 0; y < rows; y++) {
+        for (int x = 0; x < cols; x++) {
+            if (Math.random() < 0.2)
+                setBit(grid, x, y, true);
+            	}
         }
-        // Removed saveHistorySnapshot()
-    }
+}
 
-    private void updateGridParallel() throws InterruptedException {
-        CountDownLatch latch = new CountDownLatch(THREADS);
-        int chunk = rows / THREADS;
+private void updateGridParallel() throws InterruptedException {
+    CountDownLatch latch = new CountDownLatch(THREADS);
+    int chunk = rows / THREADS;
 	
 	AtomicLong totalNextGen = new AtomicLong(0);
-        for (int t = 0; t < THREADS; t++) {
-            final int start = t * chunk;
-            final int end = (t == THREADS - 1) ? rows : start + chunk;
+    for (int t = 0; t < THREADS; t++) {
+        final int start = t * chunk;
+        final int end = (t == THREADS - 1) ? rows : start + chunk;
 
-            pool.submit(() -> {
-		long threadLocalCount = 0;
-                for (int y = start; y < end; y++) {
-                    for (int x = 0; x < cols; x++) {
+        pool.submit(() -> {
+			long threadLocalCount = 0;
+            for (int y = start; y < end; y++) {
+                for (int x = 0; x < cols; x++) {
 			
-			boolean nextState;
-			if (selectedRule.equals("Rule 30")){
-				if (y == 0) {
+				boolean nextState;
+				if (selectedRule.equals("Rule 30")){
+					if (y == 0) {
         				nextState = getBit(grid, x, y);
     				} else {
         				int prevY = y - 1;
-					boolean left   = getBit(grid, (x - 1 + cols) % cols, prevY);
+						boolean left   = getBit(grid, (x - 1 + cols) % cols, prevY);
         				boolean center = getBit(grid, x, prevY);
         				boolean right  = getBit(grid, (x + 1 + cols) % cols, prevY);
 
-        // Fórmula Regla 30
         				nextState = left ^ (center || right);
         				setBit(next, x, y, nextState);
     				}	
-			} else {
-                        	int neighbors = countNeighbors(x, y);
-                        	boolean alive = getBit(grid, x, y);
-				
-				if (selectedLifeVariant.contains("B2/S7")) {
-					nextState = alive ? (neighbors == 7) : (neighbors ==2);
 				} else {
+                        int neighbors = countNeighbors(x, y);
+                        boolean alive = getBit(grid, x, y);
+				
+						if (selectedLifeVariant.contains("B2/S7")) {
+							nextState = alive ? (neighbors == 7) : (neighbors ==2);
+						} else {
                         		nextState = alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);		}
-			}
-			if (nextState) {
+						}
+						if (nextState) {
                         	threadLocalCount++;
                     	}
                         setBit(next, x, y, nextState);
-                    }
-                }
-		totalNextGen.addAndGet(threadLocalCount);
-                latch.countDown();
+                    	}
+                	}
+			totalNextGen.addAndGet(threadLocalCount);
+            latch.countDown();
             });
         }
 
         latch.await();
 	
 	currentAliveCount = totalNextGen.get();
-        for (int y = 0; y < rows; y++) {
+    for (int y = 0; y < rows; y++) {
             System.arraycopy(next[y], 0, grid[y], 0, rowBytes);
+		}
+    }
+
+private void saveHistorySnapshot() {
+    if (history.size() >= HISTORY_SIZE) {
+        history.removeFirst();
+    }
+    history.addLast(deepCopyGrid(grid));
+    }
+
+private byte[][] deepCopyGrid(byte[][] src) {
+    if (src == null) return null;
+    byte[][] copy = new byte[src.length][];
+    for (int i = 0; i < src.length; i++) {
+        copy[i] = src[i].clone();
+    }
+    return copy;
+}
+
+private int countNeighbors(int x, int y) {
+    int count = 0;
+    for (int dy = -1; dy <= 1; dy++) {
+        int ny = (y + dy + rows) % rows;
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            int nx = (x + dx + cols) % cols;
+            if (getBit(grid, nx, ny)) count++;
         }
     }
+    return count;
+}
 
-    private void saveHistorySnapshot() {
-        if (history.size() >= HISTORY_SIZE) {
-            history.removeFirst();
-        }
-        history.addLast(deepCopyGrid(grid));
-    }
+public boolean getBit(byte[][] g, int x, int y) {
+    return (g[y][x >> 3] & (1 << (x & 7))) != 0;
+}
 
-    private byte[][] deepCopyGrid(byte[][] src) {
-        if (src == null) return null;
-        byte[][] copy = new byte[src.length][];
-        for (int i = 0; i < src.length; i++) {
-            copy[i] = src[i].clone();
-        }
-        return copy;
-    }
+private void setBit(byte[][] g, int x, int y, boolean value) {
+    int bit = 1 << (x & 7);
+    int byteIndex = x >> 3;
+    if (value) g[y][byteIndex] |= bit;
+    else g[y][byteIndex] &= ~bit;
+}
 
-    private int countNeighbors(int x, int y) {
-        int count = 0;
-        for (int dy = -1; dy <= 1; dy++) {
-            int ny = (y + dy + rows) % rows;
-            for (int dx = -1; dx <= 1; dx++) {
-                if (dx == 0 && dy == 0) continue;
-                int nx = (x + dx + cols) % cols;
-                if (getBit(grid, nx, ny)) count++;
-            }
-        }
-        return count;
-    }
-
-    public boolean getBit(byte[][] g, int x, int y) {
-        return (g[y][x >> 3] & (1 << (x & 7))) != 0;
-    }
-
-    private void setBit(byte[][] g, int x, int y, boolean value) {
-        int bit = 1 << (x & 7);
-        int byteIndex = x >> 3;
-        if (value) g[y][byteIndex] |= bit;
-        else g[y][byteIndex] &= ~bit;
-    }
-
-    private void printGridState(byte[][] prevGrid, byte[][] currentGrid) {
+private void printGridState(byte[][] prevGrid, byte[][] currentGrid) {
     if (rows > 50 || cols > 50) {
         System.out.println("Grid is too large for full printout (Max 50x50 recommended). Printing aborted.");
-        return;
-    }
+    return;
+}
     
     int printRows = rows;
     int printCols = cols;
@@ -530,12 +511,11 @@ private boolean askGridSize() {
     System.out.println("=================================================");
 }
 
-    /** Draws the current grid state */
-    private void drawGrid() {
-        int imgWidth = cols;
-        int imgHeight = rows;
+private void drawGrid() {
+    int imgWidth = cols;
+    int imgHeight = rows;
 
-        for (int y = 0; y < imgHeight; y++) {
+    for (int y = 0; y < imgHeight; y++) {
             rowBuffer.clear();
             for (int x = 0; x < imgWidth; x++) {
                 byte pixelValue;
@@ -547,35 +527,33 @@ private boolean askGridSize() {
                     pixelValue = 0; // Index for COLOR_DEAD
                 }
                 rowBuffer.put(pixelValue);
-            }
-            rowBuffer.flip();
-            writer.setPixels(0, y, imgWidth, 1, format, rowBuffer, imgWidth);
         }
+        rowBuffer.flip();
+        writer.setPixels(0, y, imgWidth, 1, format, rowBuffer, imgWidth);
     }
+}
     
-    private void highlightPatternsParallel(List<String> selectedPatterns) throws InterruptedException {
-        // 1. Clear the buffer
-        for (boolean[] row : highlightBuffer) java.util.Arrays.fill(row, false);
-        if (selectedPatterns == null || selectedPatterns.isEmpty()) {
+private void highlightPatternsParallel(List<String> selectedPatterns) throws InterruptedException {
+    for (boolean[] row : highlightBuffer) java.util.Arrays.fill(row, false);
+    	if (selectedPatterns == null || selectedPatterns.isEmpty()) {
             return;
         }
 
-        // 2. Get previous grid state
-        byte[][] prevGrid = (history.size() >= 2) ? history.getLast() : grid;
+
+    byte[][] prevGrid = (history.size() >= 2) ? history.getLast() : grid;
 	//printGridState(prevGrid, grid);
 
-        CountDownLatch latch = new CountDownLatch(selectedPatterns.size());
+    CountDownLatch latch = new CountDownLatch(selectedPatterns.size());
 
-        for (String patternName : selectedPatterns) {
-            pool.submit(() -> {
-                try {
-                    LifePattern pattern = null;
-                    switch (patternName) {
+    for (String patternName : selectedPatterns) {
+        pool.submit(() -> {
+            try {
+                LifePattern pattern = null;
+                switch (patternName) {
                         case "Block":   pattern = new BlockPattern(); break;
                         case "Blinker": pattern = new BlinkerPattern(); break;
                         case "Glider":  pattern = new GliderPattern(); break;
-			case "Beehive": pattern = new BeehivePattern();break;
-                        // Add more patterns here
+						case "Beehive": pattern = new BeehivePattern();break;
                     }
                     if (pattern == null) return;
 
@@ -591,9 +569,7 @@ private boolean askGridSize() {
                                 match = pattern.matches(grid, r, c, rows, cols);
                             }
 
-                            if (match) {
-                                // Mark the cells in the shared buffer
-                                // This is thread-safe because it only writes 'true'
+                            if (match){
                                 pattern.markPattern(highlightBuffer, grid, r, c, rows, cols);
                             }
                         }
@@ -739,3 +715,4 @@ private void clearGrid() {
 
     public static void main(String[] args) { launch(); }
 }
+
