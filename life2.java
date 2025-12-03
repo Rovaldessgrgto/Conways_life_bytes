@@ -1,10 +1,17 @@
 import javafx.application.Application;
 import javafx.collections.FXCollections;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.ButtonBar.ButtonData;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.Dialog;
+import javafx.scene.layout.GridPane;
+import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
 import javafx.scene.control.SelectionMode;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.TextField;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
@@ -20,6 +27,7 @@ import javafx.animation.AnimationTimer;
 import javafx.scene.paint.Color;
 import javafx.scene.control.TextInputDialog;
 import javafx.application.Platform;
+import javafx.util.Pair;
 
 import java.io.File;
 import java.io.IOException;
@@ -31,6 +39,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayDeque; // Added
 import java.util.Deque;      // Added
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -43,6 +52,8 @@ public class life2 extends Application {
     private final int maxCanvasSize = 1000;
     private int cellSize;
     private int rowBytes;
+    private String selectedRule = "Game of Life";
+    private String selectedLifeVariant = "Standard (B3/S23)";
 
     private byte[][] grid;
     private byte[][] next;
@@ -66,6 +77,10 @@ public class life2 extends Application {
     private AnimationTimer timer;
     private volatile boolean isCalculating = false; // Prevents frame stacking
     private ListView<String> patternListView;
+    private long currentAliveCount = 0;
+    private long generationCount = 0; // Contador de generaciones
+    private Label genLabel;           // Etiqueta para mostrar la generación
+    private Label popLabel;           // Etiqueta para mostrar células vivas
 
     private double scaleFactor = 1.0;
     private final double zoomStep = 0.1;
@@ -131,9 +146,18 @@ public class life2 extends Application {
         Button startButton = new Button("Start");
         Button stopButton = new Button("Stop");
 	Button clearButton = new Button("Clear Grid");
+	
+	genLabel = new Label("Generación: 0");
+	genLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 14px;");
+
+	popLabel = new Label("Células Vivas: 0");
+	popLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 14px;");
+
+	
+	VBox controls = new VBox(10, genLabel, popLabel, oneGenButton, startButton, stopButton, clearButton, patternListView);
         
         // Removed patternListView from controls VBox
-        VBox controls = new VBox(10, oneGenButton, startButton, stopButton,clearButton, patternListView);
+    
         controls.setStyle("-fx-padding: 10; -fx-background-color: #DDDDDD");
 
         BorderPane root = new BorderPane();
@@ -170,7 +194,8 @@ public class life2 extends Application {
                         saveHistorySnapshot();
                         
                         // 2. Calculate N state (this blocks the worker thread, not FX thread)
-                        updateGridParallel(); 
+                        updateGridParallel();
+			generationCount++; 
                         
                         // 3. Find patterns by comparing N-1 and N
                         highlightPatternsParallel(selectedPatterns);
@@ -181,6 +206,10 @@ public class life2 extends Application {
                         // 4. When done, schedule draw on FX thread
                         Platform.runLater(() -> {
                             drawGrid();
+			    genLabel.setText("Generación: " + generationCount);
+    
+    			    // USAMOS LA VARIABLE QUE CALCULÓ EL UPDATE:
+    			    popLabel.setText("Células Vivas: " + currentAliveCount);
                             isCalculating = false;
                         });
                     }
@@ -214,6 +243,7 @@ public class life2 extends Application {
             try {
                 saveHistorySnapshot();
                 updateGridParallel();
+		generationCount++;
 		//printGridState(prevGrid, grid);
                 highlightPatternsParallel(selectedPatterns);
             } catch (Exception e) {
@@ -221,6 +251,8 @@ public class life2 extends Application {
             } finally {
                 Platform.runLater(() -> {
                     drawGrid();
+		    genLabel.setText("Generación: " + generationCount);
+		    popLabel.setText("Células Vivas: " + currentAliveCount);
                     isCalculating = false;
                 });
             }
@@ -268,35 +300,85 @@ private void handleMouseClick(javafx.scene.input.MouseEvent event) {
     }
     
     event.consume();
-}    private boolean askGridSize() {
-        TextInputDialog dialog = new TextInputDialog("1000x1000");
-        dialog.setTitle("Grid Size");
-        dialog.setHeaderText("Enter grid size (format: rows x columns, up to 5000x5000)");
-        dialog.setContentText("Example: 2500x3000");
+}    
 
-        Optional<String> result = dialog.showAndWait();
-        if (result.isEmpty()) return false;
+private boolean askGridSize() {
+    // Cambiamos el tipo de retorno del Dialog a algo genérico o simplemente usamos Pair
+    Dialog<Pair<String, String>> dialog = new Dialog<>();
+    dialog.setTitle("Configuración de Simulación");
+    dialog.setHeaderText("Configura Tamaño, Regla y Variante");
 
-        String input = result.get().toLowerCase().replace(" ", "");
-        if (!input.matches("\\d+x\\d+")) return false;
+    ButtonType loginButtonType = new ButtonType("Aceptar", javafx.scene.control.ButtonBar.ButtonData.OK_DONE);
+    dialog.getDialogPane().getButtonTypes().addAll(loginButtonType, ButtonType.CANCEL);
 
-        String[] parts = input.split("x");
-        rows = Integer.parseInt(parts[0]);
-        cols = Integer.parseInt(parts[1]);
+    GridPane gridPane = new GridPane();
+    gridPane.setHgap(10);
+    gridPane.setVgap(10);
+    gridPane.setPadding(new javafx.geometry.Insets(20, 150, 10, 10));
 
-        if (rows <= 0 || cols <= 0 || rows > 5000 || cols > 5000) {
-            showError("Grid size must be between 1x1 and 5000x5000.");
-            return false;
+    TextField sizeField = new TextField();
+    sizeField.setPromptText("1000x1000");
+    sizeField.setText("1000x1000");
+
+    // ComboBox 1: Regla Principal
+    ComboBox<String> ruleBox = new ComboBox<>();
+    ruleBox.getItems().addAll("Game of Life", "Rule 30");
+    ruleBox.setValue("Game of Life");
+
+    // ComboBox 2: Variante del Juego de la Vida (Nuevo)
+    ComboBox<String> variantBox = new ComboBox<>();
+    variantBox.getItems().addAll("Standard (B3/S23)", "Variant (B2/S7)");
+    variantBox.setValue("Standard (B3/S23)");
+
+    // Lógica visual: Deshabilitar la variante si se elige Rule 30
+    ruleBox.setOnAction(e -> {
+        variantBox.setDisable(ruleBox.getValue().equals("Rule 30"));
+    });
+
+    gridPane.add(new Label("Tamaño (Filas x Cols):"), 0, 0);
+    gridPane.add(sizeField, 1, 0);
+    gridPane.add(new Label("Regla Principal:"), 0, 1);
+    gridPane.add(ruleBox, 1, 1);
+    gridPane.add(new Label("Variante (solo GoL):"), 0, 2);
+    gridPane.add(variantBox, 1, 2);
+
+    dialog.getDialogPane().setContent(gridPane);
+
+    dialog.setResultConverter(dialogButton -> {
+        if (dialogButton == loginButtonType) {
+            // AQUÍ guardamos la variante directamente en la variable de clase
+            selectedLifeVariant = variantBox.getValue();
+            return new Pair<>(sizeField.getText(), ruleBox.getValue());
         }
+        return null;
+    });
 
-        int cellWidth = maxCanvasSize / cols;
-        int cellHeight = maxCanvasSize / rows;
-        cellSize = Math.max(1, Math.min(cellWidth, cellHeight));
+    Optional<Pair<String, String>> result = dialog.showAndWait();
 
-        return true;
+    if (result.isEmpty()) return false;
+
+    String input = result.get().getKey().toLowerCase().replace(" ", "");
+    selectedRule = result.get().getValue(); // Guardamos la regla principal
+
+    if (!input.matches("\\d+x\\d+")) return false;
+
+    String[] parts = input.split("x");
+    rows = Integer.parseInt(parts[0]);
+    cols = Integer.parseInt(parts[1]);
+
+    if (rows <= 0 || cols <= 0 || rows > 5000 || cols > 5000) {
+        showError("Grid size must be between 1x1 and 5000x5000.");
+        return false;
     }
 
-    private void handleZoom(ScrollEvent event) {
+    int cellWidth = maxCanvasSize / cols;
+    int cellHeight = maxCanvasSize / rows;
+    cellSize = Math.max(1, Math.min(cellWidth, cellHeight));
+
+    return true;
+}
+
+ private void handleZoom(ScrollEvent event) {
         if (event.getDeltaY() == 0) return;
 
         double zoomFactor = (event.getDeltaY() > 0) ? (1 + zoomStep) : (1 - zoomStep);
@@ -322,26 +404,54 @@ private void handleMouseClick(javafx.scene.input.MouseEvent event) {
     private void updateGridParallel() throws InterruptedException {
         CountDownLatch latch = new CountDownLatch(THREADS);
         int chunk = rows / THREADS;
-
+	
+	AtomicLong totalNextGen = new AtomicLong(0);
         for (int t = 0; t < THREADS; t++) {
             final int start = t * chunk;
             final int end = (t == THREADS - 1) ? rows : start + chunk;
 
             pool.submit(() -> {
+		long threadLocalCount = 0;
                 for (int y = start; y < end; y++) {
                     for (int x = 0; x < cols; x++) {
-                        int neighbors = countNeighbors(x, y);
-                        boolean alive = getBit(grid, x, y);
-                        boolean nextState = alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);
+			
+			boolean nextState;
+			if (selectedRule.equals("Rule 30")){
+				if (y == 0) {
+        				nextState = getBit(grid, x, y);
+    				} else {
+        				int prevY = y - 1;
+					boolean left   = getBit(grid, (x - 1 + cols) % cols, prevY);
+        				boolean center = getBit(grid, x, prevY);
+        				boolean right  = getBit(grid, (x + 1 + cols) % cols, prevY);
+
+        // Fórmula Regla 30
+        				nextState = left ^ (center || right);
+        				setBit(next, x, y, nextState);
+    				}	
+			} else {
+                        	int neighbors = countNeighbors(x, y);
+                        	boolean alive = getBit(grid, x, y);
+				
+				if (selectedLifeVariant.contains("B2/S7")) {
+					nextState = alive ? (neighbors == 7) : (neighbors ==2);
+				} else {
+                        		nextState = alive ? (neighbors == 2 || neighbors == 3) : (neighbors == 3);		}
+			}
+			if (nextState) {
+                        	threadLocalCount++;
+                    	}
                         setBit(next, x, y, nextState);
                     }
                 }
+		totalNextGen.addAndGet(threadLocalCount);
                 latch.countDown();
             });
         }
 
         latch.await();
-
+	
+	currentAliveCount = totalNextGen.get();
         for (int y = 0; y < rows; y++) {
             System.arraycopy(next[y], 0, grid[y], 0, rowBytes);
         }
